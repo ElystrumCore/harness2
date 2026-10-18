@@ -1,0 +1,276 @@
+[
+  {
+    "id": "req-model-opus",
+    "target": "request",
+    "value": {
+      "model": "claude-opus-4",
+      "max_tokens": 32,
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello"
+        }
+      ]
+    },
+    "expected": "refuse",
+    "why": "The model is not claude-haiku-5-5, the only permitted model.",
+    "accepted": false,
+    "parser_error": null
+  },
+  {
+    "id": "req-max-tokens-over",
+    "target": "request",
+    "value": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 5000,
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello"
+        }
+      ]
+    },
+    "expected": "refuse",
+    "why": "max_tokens exceeds the permitted range of 1 to 4096.",
+    "accepted": false,
+    "parser_error": null
+  },
+  {
+    "id": "req-tool-use-in-user",
+    "target": "request",
+    "value": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 32,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_1",
+              "name": "read",
+              "input": {
+                "path": "notes.txt"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "refuse",
+    "why": "tool_use blocks are only valid in assistant-role messages.",
+    "accepted": true,
+    "parser_error": null
+  },
+  {
+    "id": "req-tool-result-no-id",
+    "target": "request",
+    "value": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 32,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "content": "ok"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "refuse",
+    "why": "tool_result requires a nonempty tool_use_id.",
+    "accepted": true,
+    "parser_error": null
+  },
+  {
+    "id": "req-image-block",
+    "target": "request",
+    "value": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 32,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "image",
+              "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "AAAA"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "refuse",
+    "why": "Image blocks are excluded from the permitted request shapes.",
+    "accepted": false,
+    "parser_error": null
+  },
+  {
+    "id": "req-thinking-in-user",
+    "target": "request",
+    "value": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 32,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "prior step",
+              "signature": "sig-test"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": "refuse",
+    "why": "Signed thinking history is only allowed in assistant-role messages.",
+    "accepted": false,
+    "parser_error": null
+  },
+  {
+    "id": "oc-nonzero-exit-stop",
+    "target": "opencode",
+    "value": {
+      "events": [
+        {
+          "type": "text",
+          "part": {
+            "text": "done"
+          }
+        },
+        {
+          "type": "step_finish",
+          "part": {
+            "reason": "stop"
+          }
+        }
+      ],
+      "exit_code": 1
+    },
+    "expected": "refuse",
+    "why": "Only zero-exit complete executions can succeed, and this run exited with code 1.",
+    "accepted": false,
+    "parser_error": null
+  },
+  {
+    "id": "oc-write-failure-then-stop",
+    "target": "opencode",
+    "value": {
+      "events": [
+        {
+          "type": "tool_use",
+          "part": {
+            "tool": "write",
+            "state": {
+              "status": "error",
+              "input": {
+                "path": "notes.txt"
+              },
+              "error": "permission denied"
+            }
+          }
+        },
+        {
+          "type": "step_finish",
+          "part": {
+            "reason": "stop"
+          }
+        }
+      ],
+      "exit_code": 0
+    },
+    "expected": "refuse",
+    "why": "Write failures are fatal and cannot be cleared by a later terminal stop.",
+    "accepted": false,
+    "parser_error": null
+  },
+  {
+    "id": "oc-tool-after-terminal",
+    "target": "opencode",
+    "value": {
+      "events": [
+        {
+          "type": "step_finish",
+          "part": {
+            "reason": "end_turn"
+          }
+        },
+        {
+          "type": "tool_use",
+          "part": {
+            "tool": "read",
+            "state": {
+              "status": "completed",
+              "input": {
+                "path": "notes.txt"
+              },
+              "output": "x"
+            }
+          }
+        }
+      ],
+      "exit_code": 0
+    },
+    "expected": "refuse",
+    "why": "A tool call after a terminal step_finish cannot borrow the earlier success.",
+    "accepted": true,
+    "parser_error": null
+  },
+  {
+    "id": "oc-unknown-event-part",
+    "target": "opencode",
+    "value": {
+      "events": [
+        {
+          "type": "telemetry",
+          "part": "opaque"
+        },
+        {
+          "type": "step_finish",
+          "part": {
+            "reason": "stop"
+          }
+        }
+      ],
+      "exit_code": 0
+    },
+    "expected": "refuse",
+    "why": "Unknown event types and malformed parts must refuse rather than be ignored.",
+    "accepted": true,
+    "parser_error": null
+  },
+  {
+    "id": "cand-executable-script",
+    "target": "candidate",
+    "value": {
+      "scripts/setup.sh": "#!/bin/sh\necho ok\n"
+    },
+    "expected": "refuse",
+    "why": "Executable scripts are not allowed in the candidate mapping.",
+    "accepted": false,
+    "parser_error": null
+  },
+  {
+    "id": "cand-traversal-nonstring",
+    "target": "candidate",
+    "value": {
+      "tool_descriptions/../../systemprompt.md": "guidance",
+      "tool_descriptions/tool_guidance.md": {
+        "text": "nested object"
+      }
+    },
+    "expected": "refuse",
+    "why": "The mapping contains a traversal filename and a nonstring content value.",
+    "accepted": false,
+    "parser_error": null
+  }
+]

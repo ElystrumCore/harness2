@@ -103,34 +103,58 @@ def assess(task_id, work, *, worker_success):
 
 
 def opencode_result(stdout, exit_code):
-    events = []
+    invalid = {'success': False, 'outcome': 'invalid_events', 'response': ''}
+    if not isinstance(stdout, str):
+        return invalid
     try:
         events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
-        if any(not isinstance(event, dict) for event in events):
-            raise ValueError()
-    except (ValueError, TypeError):
-        return {'success': False, 'outcome': 'invalid_events', 'response': ''}
-    text = '\n'.join(str(e.get('part', {}).get('text', '')) for e in events if e.get('type') == 'text')
-    terminal = any(e.get('type') == 'step_finish' and e.get('part', {}).get('reason') in ('stop', 'end_turn') for e in events)
-    fatal = any(e.get('type') == 'error' for e in events)
+        known = {'step_start', 'step_finish', 'tool_use', 'text', 'reasoning', 'error'}
+        for event in events:
+            if not isinstance(event, dict) or event.get('type') not in known:
+                return invalid
+            if event['type'] == 'error':
+                continue
+            part = event.get('part')
+            if not isinstance(part, dict):
+                return invalid
+            if event['type'] in {'text', 'reasoning'} and not isinstance(part.get('text'), str):
+                return invalid
+            if event['type'] == 'step_finish' and not isinstance(part.get('reason'), str):
+                return invalid
+            if event['type'] == 'tool_use':
+                state = part.get('state')
+                if (part.get('tool') not in {'read', 'write', 'edit', 'glob', 'grep'}
+                    or not isinstance(state, dict) or state.get('status') not in {'completed', 'error'}
+                    or not isinstance(state.get('input'), dict)
+                    or (state['status'] == 'error' and not isinstance(state.get('error'), str))):
+                    return invalid
+                if any(name in state['input'] and not isinstance(state['input'][name], str)
+                       for name in ('filePath', 'filepath')):
+                    return invalid
+    except (ValueError, TypeError, RecursionError):
+        return invalid
+    text = '\n'.join(e['part']['text'] for e in events if e['type'] == 'text')
+    terminals = [i for i, e in enumerate(events) if e['type'] == 'step_finish'
+                 and e['part']['reason'] in {'stop', 'end_turn'}]
+    terminal = terminals == [len(events) - 1]
+    fatal = any(e['type'] == 'error' for e in events)
     unresolved = set()
     for event in events:
-        if event.get('type') != 'tool_use':
+        if event['type'] != 'tool_use':
             continue
-        part = event.get('part') or {}
-        state = part.get('state') or {}
-        args = state.get('input') or {}
-        identity = (part.get('tool'), args.get('filePath') or args.get('filepath') or json.dumps(args, sort_keys=True))
-        if state.get('status') == 'error':
+        part = event['part']
+        state = part['state']
+        args = state['input']
+        identity = (part['tool'], args.get('filePath') or args.get('filepath') or json.dumps(args, sort_keys=True))
+        if state['status'] == 'error':
             unresolved.add(identity)
-            reason = str(state.get('error', '')).lower()
-            if part.get('tool') != 'read' or 'file not found' not in reason or any(word in reason for word in ('permission', 'denied', 'rejected', 'forbidden', 'not allowed', 'refused')):
+            reason = state['error'].lower()
+            if part['tool'] != 'read' or 'file not found' not in reason or any(word in reason for word in ('permission', 'denied', 'rejected', 'forbidden', 'not allowed', 'refused')):
                 fatal = True
-        elif state.get('status') == 'completed':
+        elif state['status'] == 'completed':
             unresolved.discard(identity)
-    errors = fatal or bool(unresolved)
-    ok = exit_code == 0 and terminal and not errors
-    return {'success': ok, 'outcome': 'success' if ok else 'worker_failed', 'response': text}
+    ok = type(exit_code) is int and exit_code == 0 and terminal and not fatal and not unresolved
+    return {'success': bool(ok), 'outcome': 'success' if ok else 'worker_failed', 'response': text}
 
 
 def chuck_result(stdout, exit_code):
@@ -323,7 +347,7 @@ class HybridAdapter:
         revalidate = getattr(self.executor, 'revalidate', None)
         if callable(revalidate):
             revalidate()
-        identity = digest({'task': TASKS[task_id]['csv'], 'prompt': PROMPT, 'candidate': candidate,
+        identity = digest({'task': TASKS[task_id], 'prompt': PROMPT, 'candidate': candidate,
                            'profile': self.profile, 'model': MODEL, 'policy': 'pilot-read-write-v1',
                            'runtime': getattr(self.executor, 'identity', {}),
                            'execution_sources': execution_sources()})
