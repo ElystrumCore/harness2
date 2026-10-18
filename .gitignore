@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+dependencies/*/
+runs/
+.env
+.env.*
+runtime.json
+run-*/

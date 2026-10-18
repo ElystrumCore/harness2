@@ -1,0 +1,83 @@
+diff --git a/packages/opencode/src/cli/cmd/run.ts b/packages/opencode/src/cli/cmd/run.ts
+index 0874bee..29ceea6 100644
+--- a/packages/opencode/src/cli/cmd/run.ts
++++ b/packages/opencode/src/cli/cmd/run.ts
+@@ -426,9 +426,12 @@ export const RunCommand = cmd({
+         }
+       }
+ 
+-      function emit(type: string, data: Record<string, unknown>) {
++      async function emit(type: string, data: Record<string, unknown>) {
+         if (args.format === "json") {
+-          process.stdout.write(JSON.stringify({ type, timestamp: Date.now(), sessionID, ...data }) + EOL)
++          const output = JSON.stringify({ type, timestamp: Date.now(), sessionID, ...data }) + EOL
++          await new Promise<void>((resolve, reject) => {
++            process.stdout.write(output, (error) => error ? reject(error) : resolve())
++          })
+           return true
+         }
+         return false
+@@ -458,7 +461,7 @@ export const RunCommand = cmd({
+             if (part.sessionID !== sessionID) continue
+ 
+             if (part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
+-              if (emit("tool_use", { part })) continue
++              if (await emit("tool_use", { part })) continue
+               if (part.state.status === "completed") {
+                 tool(part)
+                 continue
+@@ -482,15 +485,15 @@ export const RunCommand = cmd({
+             }
+ 
+             if (part.type === "step-start") {
+-              if (emit("step_start", { part })) continue
++              if (await emit("step_start", { part })) continue
+             }
+ 
+             if (part.type === "step-finish") {
+-              if (emit("step_finish", { part })) continue
++              if (await emit("step_finish", { part })) continue
+             }
+ 
+             if (part.type === "text" && part.time?.end) {
+-              if (emit("text", { part })) continue
++              if (await emit("text", { part })) continue
+               const text = part.text.trim()
+               if (!text) continue
+               if (!process.stdout.isTTY) {
+@@ -503,7 +506,7 @@ export const RunCommand = cmd({
+             }
+ 
+             if (part.type === "reasoning" && part.time?.end && args.thinking) {
+-              if (emit("reasoning", { part })) continue
++              if (await emit("reasoning", { part })) continue
+               const text = part.text.trim()
+               if (!text) continue
+               const line = `Thinking: ${text}`
+@@ -525,7 +528,7 @@ export const RunCommand = cmd({
+               err = String(props.error.data.message)
+             }
+             error = error ? error + EOL + err : err
+-            if (emit("error", { error: props.error })) continue
++            if (await emit("error", { error: props.error })) continue
+             UI.error(err)
+           }
+ 
+@@ -631,7 +634,7 @@ export const RunCommand = cmd({
+       }
+       await share(sdk, sessionID)
+ 
+-      loop().catch((e) => {
++      const eventsDone = loop().catch((e) => {
+         console.error(e)
+         process.exit(1)
+       })
+@@ -655,6 +658,8 @@ export const RunCommand = cmd({
+           parts: [...files, { type: "text", text: message }],
+         })
+       }
++      // The CLI explicitly exits after this handler; drain terminal events and stdout first.
++      await eventsDone
+     }
+ 
+     if (args.attach) {
