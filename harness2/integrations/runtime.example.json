@@ -1,0 +1,7 @@
+{
+  "oc_root": "/absolute/path/to/pinned-opencode-v1",
+  "bun": "/absolute/path/to/bun-1.3.11",
+  "chuck_root": "/absolute/path/to/pinned-hyperschool",
+  "hub_root": "/absolute/path/to/pinned-agent-lineage",
+  "chuck_python": "/absolute/path/to/chuck-venv/bin/python"
+}

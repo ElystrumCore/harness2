@@ -99,6 +99,8 @@ class Proposer:
     _calls: list[Reply] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        if self.spec.kind == "anthropic_api":
+            raise ValueError("anthropic_api requires the isolated HybridApiProposer and admitted gateway")
         if not self.spec.model.strip():
             raise ValueError("Set HARNESS2_IMPROVER_MODEL before starting model sessions")
 

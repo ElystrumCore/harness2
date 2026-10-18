@@ -207,3 +207,10 @@ upstream licenses; see
 
 This is not an officially supported Google product. This project is not eligible
 for the [Google Open Source Software Vulnerability Rewards Program](https://bughunters.google.com/open-source-security).
+
+## Optional Chuck/OpenCode integration
+
+This fork includes an opt-in, isolated [hybrid evaluation lab](docs/HYBRID-PILOT.md)
+with a direct Anthropic text proposer and provider receipt accounting. It retains
+the native Harness2 method and does not register a production worker or activate
+learned prompts. The reference OpenCode dependency pin remains unchanged.

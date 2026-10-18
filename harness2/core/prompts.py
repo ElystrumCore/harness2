@@ -630,6 +630,17 @@ def _build_surface_texts() -> dict[str, _SurfaceText]:
         ]
     )
     return {
+        "hybrid": _SurfaceText(
+            surface_md=(
+                "# RESTRICTED TEXT SURFACE\nChange only systemprompt.md and "
+                "tool_descriptions/tool_guidance.md in context/harness/. Keep both short. "
+                "No scripts, plugins, skills, subagents, credentials, policy or provider changes. "
+                "Make only changes justified by the supplied task and trajectories."
+            ),
+            inv="Improve the procedure for reliable artifact delivery using only the two prompt files.",
+            dom="Improve signed-decimal reconciliation guidance using only the two prompt files.",
+            tts_surface="Only systemprompt.md and tool_descriptions/tool_guidance.md may change.",
+        ),
         "opencode": _SurfaceText(
             surface_md=_SURFACE_OPENCODE,
             inv=_INV_TEMPLATE.replace(
