@@ -31,6 +31,28 @@ class Refused(ValueError):
     pass
 
 
+def fsync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def durable_directory(path):
+    path = Path(path).absolute()
+    missing = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for directory in reversed(missing):
+        directory.mkdir(mode=0o700, exist_ok=True)
+        fsync_directory(directory)
+        fsync_directory(directory.parent)
+    fsync_directory(path)
+
+
 def number(value, *, positive=False):
     if isinstance(value, bool) or not isinstance(value, (float, int)):
         raise Refused('invalid numeric value')
@@ -50,7 +72,7 @@ class Ledger:
         self.requests = set()
         self.sessions = {}
         self.spent = 0.0
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        durable_directory(self.path.parent)
         self._fd = os.open(str(self.path) + '.lock', os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -92,6 +114,7 @@ class Ledger:
             if written != len(data):
                 raise OSError('short ledger write')
             os.fsync(fd)
+            fsync_directory(self.path.parent)
         finally:
             os.close(fd)
         self._apply(row)
@@ -238,7 +261,7 @@ class _Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 class Gateway:
     def __init__(self, root: Path, *, key=None, total_cap=5.0, session_cap=0.25, transport=None):
         self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        durable_directory(self.root)
         if (self.root / 'STOPPED.json').exists():
             raise Refused('experiment halt persists; inspect prior evidence')
         self.ledger = Ledger(self.root / 'receipts.jsonl', total_cap=total_cap, session_cap=session_cap)

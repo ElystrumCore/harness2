@@ -124,7 +124,7 @@ def opencode_result(stdout, exit_code):
         if state.get('status') == 'error':
             unresolved.add(identity)
             reason = str(state.get('error', '')).lower()
-            if any(word in reason for word in ('permission', 'denied', 'rejected', 'forbidden', 'not allowed', 'refused')):
+            if part.get('tool') != 'read' or 'file not found' not in reason or any(word in reason for word in ('permission', 'denied', 'rejected', 'forbidden', 'not allowed', 'refused')):
                 fatal = True
         elif state.get('status') == 'completed':
             unresolved.discard(identity)
@@ -152,6 +152,11 @@ def render_trajectory(profile, events):
     header = ('[TRACE COVERAGE] Every captured event is included. Chuck tool records contain '
               'argument hashes and bounded result prefixes, not full tool arguments/output.\n')
     return header + '\n'.join('[EVENT] ' + json.dumps(event, ensure_ascii=True) for event in events)
+
+
+def execution_sources():
+    return {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(Path(__file__).parent.glob('*.py'))}
 
 
 def _source_pin(root, expected, *, allow_patch=False):
@@ -184,15 +189,23 @@ class WorkerExecutor:
         self.chuck_root, self.hub_root = Path(chuck_root).resolve(), Path(hub_root).resolve()
         self.chuck_python, self.chuck_runtime = Path(chuck_python), Path(chuck_runtime).resolve()
         self.lock = threading.Lock()
-        self.identity = {
+        self.identity = self._snapshot_identity()
+
+    def _snapshot_identity(self):
+        return {
             'chuck': _source_pin(self.chuck_root, 'b5c0ef2bb5f21061e32b4422454095b3adb56746'),
             'hub': _source_pin(self.hub_root, '03db5f7f8de333b2ac1b6320873fe24db501a483'),
             'opencode': _source_pin(self.oc_root, '23fb5e0516c99ac04a1aa46c193efda2e1b9bb24', allow_patch=True),
             'bun_sha256': hashlib.sha256(self.bun.read_bytes()).hexdigest(),
         }
 
+    def revalidate(self):
+        if self.identity != self._snapshot_identity():
+            raise Refused('runtime source identity changed since admission')
+
     def __call__(self, profile, task, work, candidate, run_id):
         with self.lock:
+            self.revalidate()
             if getattr(self.gateway, 'halted', False):
                 raise Refused('experiment halted after a false success')
             session_id = f'{profile}:{run_id}'
@@ -307,10 +320,13 @@ class HybridAdapter:
         if task_id not in TASKS or not run_id or '..' in Path(run_id).parts or Path(run_id).is_absolute():
             raise Refused('invalid task or run identity')
         candidate = read_candidate(harness_dir or self.base_harness())
+        revalidate = getattr(self.executor, 'revalidate', None)
+        if callable(revalidate):
+            revalidate()
         identity = digest({'task': TASKS[task_id]['csv'], 'prompt': PROMPT, 'candidate': candidate,
                            'profile': self.profile, 'model': MODEL, 'policy': 'pilot-read-write-v1',
                            'runtime': getattr(self.executor, 'identity', {}),
-                           'adapter_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()})
+                           'execution_sources': execution_sources()})
         run_dir = self.root / 'executions' / run_id
         record = run_dir / 'attempt.json'
         if record.exists():

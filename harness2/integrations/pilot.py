@@ -11,7 +11,7 @@ from pathlib import Path
 
 from ..core import recursion, schedule
 from .anthropic_channel import HybridApiProposer, request_json
-from .gateway import Gateway, Ledger, MODEL, Refused
+from .gateway import Gateway, Ledger, MODEL, Refused, durable_directory
 from .hybrid import BASE, TASKS, HybridAdapter, WorkerExecutor, digest, read_candidate
 from .runtime import load_runtime
 
@@ -35,6 +35,8 @@ def prior_spend(lab):
     for root in Path(lab).glob('run-*'):
         if root.is_dir() and next(root.rglob('STOPPED.json'), None) is not None:
             raise Refused('prior experiment halt persists across this series')
+        if root.is_dir() and (root / 'experiment.json').exists() and not (root / 'gateway/receipts.jsonl').exists():
+            raise Refused('prior admitted experiment has no receipt journal; reconciliation required')
     for path in Path(lab).glob('run-*/gateway/receipts.jsonl'):
         ledger = Ledger(path)
         try:
@@ -75,14 +77,13 @@ def run(output, *, key, credential_source, lab, remaining_cap=5.0, previous_usd=
     output = Path(output).resolve()
     if output.exists():
         raise Refused('experiment directory already exists; no automatic paid replay')
-    output.mkdir(parents=True, mode=0o700)
+    durable_directory(output)
     manifest = {**plan(), 'started_at': time.time(), 'credential_source': credential_source,
                 'total_cap_usd': remaining_cap, 'series_cap_usd': 5.0, 'previous_experiments_usd': previous_usd,
                 'task_sha256': {key: digest(value) for key, value in TASKS.items()},
                 'base_sha256': digest(BASE), 'pricing_source':
                 'https://platform.claude.com/docs/en/about-claude/pricing',
-                'pricing_checked_at': '2026-10-18', 'python_packages': {
-                    name: importlib.metadata.version(name) for name in ('harness2', 'anthropic')},
+                'pricing_checked_at': '2026-10-18', 'python_packages': package_versions(),
                 'implementation_sha256': {p.name: __import__('hashlib').sha256(p.read_bytes()).hexdigest()
                     for p in Path(__file__).parent.glob('*.py')}}
     (output / 'experiment.json').write_text(json.dumps(manifest, indent=2))
@@ -161,6 +162,16 @@ def run(output, *, key, credential_source, lab, remaining_cap=5.0, previous_usd=
               verified=report['verified'], attempts=report['attempts'],
               estimated_usd=report['estimated_usd'], unresolved=report['unresolved_reservations'])
     return report
+
+
+def package_versions():
+    versions = {}
+    for name in ('harness2', 'anthropic'):
+        try:
+            versions[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            versions[name] = None
+    return versions
 
 
 def main(argv=None):
