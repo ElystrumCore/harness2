@@ -190,31 +190,51 @@ def validate_request(body):
     if len(raw) > MAX_BODY:
         raise Refused('request size guard before transmission')
 
-    def content(value, *, assistant=False):
+    def content(value, *, role=None):
         if isinstance(value, str):
             return
         if not isinstance(value, list):
             raise Refused('unsupported content')
         for block in value:
-            kinds = {'text', 'tool_use', 'tool_result'} | ({'thinking', 'redacted_thinking'} if assistant else set())
-            if not isinstance(block, dict) or block.get('type') not in kinds:
+            kinds = {'text'}
+            if role == 'assistant':
+                kinds |= {'tool_use', 'thinking', 'redacted_thinking'}
+            elif role == 'user':
+                kinds.add('tool_result')
+            if not isinstance(block, dict) or not isinstance(block.get('type'), str) or block['type'] not in kinds:
                 raise Refused('non-text or server-side feature excluded')
+            if block['type'] == 'text' and not isinstance(block.get('text'), str):
+                raise Refused('text block requires string text')
+            if block['type'] == 'tool_use' and (
+                any(not isinstance(block.get(k), str) or not block[k] for k in ('id', 'name'))
+                or not isinstance(block.get('input'), dict)
+            ):
+                raise Refused('malformed tool-use history')
             if block['type'] == 'thinking' and any(not isinstance(block.get(k), str) for k in ('thinking', 'signature')):
                 raise Refused('malformed signed thinking replay')
             if block['type'] == 'redacted_thinking' and not isinstance(block.get('data'), str):
                 raise Refused('malformed redacted thinking replay')
             if block['type'] == 'tool_result':
+                if not isinstance(block.get('tool_use_id'), str) or not block['tool_use_id']:
+                    raise Refused('tool-result history requires identity')
+                if 'is_error' in block and type(block['is_error']) is not bool:
+                    raise Refused('tool-result error flag must be Boolean')
+                # Nested results are quoted text data, never nested tool/history authority.
                 content(block.get('content', ''))
 
     for message in body['messages']:
-        if not isinstance(message, dict) or message.get('role') not in {'user', 'assistant'}:
+        if not isinstance(message, dict) or not isinstance(message.get('role'), str) or message['role'] not in {'user', 'assistant'}:
             raise Refused('invalid message')
-        content(message.get('content'), assistant=message['role'] == 'assistant')
+        content(message.get('content'), role=message['role'])
     if 'system' in body:
         content(body['system'])
+    if not isinstance(body.get('tools', []), list):
+        raise Refused('tools must be a list')
     for tool in body.get('tools', []):
-        if tool.get('type', 'custom') != 'custom' or not isinstance(tool.get('input_schema'), dict):
+        if not isinstance(tool, dict) or tool.get('type', 'custom') != 'custom' or not isinstance(tool.get('input_schema'), dict):
             raise Refused('server-side tools excluded')
+        if not isinstance(tool.get('name'), str) or not tool['name']:
+            raise Refused('tool definition requires a name')
     # Reserve above the most expensive Haiku input/cache tier, plus fixed overhead.
     # Full raw-byte cap bounds even poor tokenization; actual receipts select the tier.
     return ((len(raw) + 8192) * 1.0 + output * 2.5) / 1_000_000
