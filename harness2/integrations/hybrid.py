@@ -373,6 +373,8 @@ class HybridAdapter:
             return run_dir
         if run_dir.exists():
             raise Refused('unfinished run requires reconciliation')
+        if memory is not None:
+            run_dir.mkdir(mode=0o700, parents=True)
         work = run_dir / 'work'
         work.mkdir(parents=True)
         (work / 'ledger.csv').write_text(TASKS[task_id]['csv'])
