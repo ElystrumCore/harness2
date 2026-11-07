@@ -106,3 +106,20 @@ class MemoryEvidenceTests(unittest.TestCase):
                 adapter.execute('ledger-train', None, 'one')
             with self.assertRaises(Refused):
                 adapter.delivered(run)
+
+
+class MemoryPrivacyTests(unittest.TestCase):
+    def test_memory_run_directory_is_owner_only_independent_of_umask(self):
+        import os
+        import stat
+        with tempfile.TemporaryDirectory() as tmp:
+            def executor(profile, task, work, candidate, run_id, **kwargs):
+                (work / 'answer.json').write_text('{"total":"85.15"}')
+                return {'success': True, 'outcome': 'success', 'usd': 0, 'exit_code': 0, 'wall_s': 0}
+            adapter = HybridAdapter(Path(tmp), 'chuck', executor=executor, memory_packet=packet())
+            previous = os.umask(0)
+            try:
+                run = adapter.execute('ledger-train', None, 'one')
+            finally:
+                os.umask(previous)
+            self.assertEqual(stat.S_IMODE(run.stat().st_mode), 0o700)
