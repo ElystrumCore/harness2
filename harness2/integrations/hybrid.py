@@ -227,7 +227,7 @@ class WorkerExecutor:
         if self.identity != self._snapshot_identity():
             raise Refused('runtime source identity changed since admission')
 
-    def __call__(self, profile, task, work, candidate, run_id):
+    def __call__(self, profile, task, work, candidate, run_id, *, memory=None):
         with self.lock:
             self.revalidate()
             if getattr(self.gateway, 'halted', False):
@@ -235,7 +235,10 @@ class WorkerExecutor:
             session_id = f'{profile}:{run_id}'
             token = self.gateway.token(session_id)
             (work / 'AGENTS.md').write_text('\n\n'.join(candidate.values()))
-            (work / 'task.txt').write_text(PROMPT)
+            task_prompt = PROMPT
+            if memory is not None:
+                task_prompt += '\n\n' + memory.for_run(run_id).render()
+            (work / 'task.txt').write_text(task_prompt)
             common = {'CHUCK_MEMORY': 'off', 'CHUCK_LEARNING': 'off', 'CHUCK_HEART_MIDRUN': 'off',
                       'CYCLONE_URL': 'http://127.0.0.1:1', 'REDIS_URL': 'redis://127.0.0.1:1',
                       'QDRANT_URL': 'http://127.0.0.1:1'}
@@ -267,7 +270,7 @@ class WorkerExecutor:
                        'OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER': '1',
                        'OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX': '2048'}
                 command = [str(self.bun), 'run', '--cwd', str(self.oc_root / 'packages/opencode'),
-                           '--conditions=browser', 'src/index.ts', 'run', PROMPT, '--dir', '/work',
+                           '--conditions=browser', 'src/index.ts', 'run', task_prompt, '--dir', '/work',
                            '--model', f'anthropic/{MODEL}', '--title', 'synthetic-hybrid-pilot', '--format', 'json']
                 mounts = [self.oc_root, self.bun.parent]
             else:
@@ -297,9 +300,10 @@ class WorkerExecutor:
 
 
 class HybridAdapter:
-    def __init__(self, root, profile, *, executor):
+    def __init__(self, root, profile, *, executor, memory_packet=None):
         self.root = Path(root)
         self.executor = executor
+        self.memory_packet = memory_packet
         self.profile = profile
         self.substrate = HybridSubstrate(profile, self._launch)
         channel = ChannelSpec('anthropic_api', MODEL, timeout=60, steps=1)
@@ -347,7 +351,8 @@ class HybridAdapter:
         revalidate = getattr(self.executor, 'revalidate', None)
         if callable(revalidate):
             revalidate()
-        identity = digest({'task': TASKS[task_id], 'prompt': PROMPT, 'candidate': candidate,
+        memory = self.memory_packet.for_run(run_id) if self.memory_packet is not None else None
+        identity = digest({'memory_sha256': memory.sha256 if memory else None, 'task': TASKS[task_id], 'prompt': PROMPT, 'candidate': candidate,
                            'profile': self.profile, 'model': MODEL, 'policy': 'pilot-read-write-v1',
                            'runtime': getattr(self.executor, 'identity', {}),
                            'execution_sources': execution_sources()})
@@ -357,6 +362,8 @@ class HybridAdapter:
             prior = json.loads(record.read_text())
             if prior.get('false_success'):
                 raise Refused('cached false success remains refused')
+            if memory is not None and ((run_dir / 'memory.json').is_symlink() or not (run_dir / 'memory.json').is_file() or (run_dir / 'memory.json').read_text() != memory.data):
+                raise Refused('recorded memory packet drift')
             if prior['identity'] != identity:
                 raise Refused('run identity differs; refuse automatic paid replay')
             if prior.get('artifact_sha256') != self._artifact_hash(run_dir / 'work'):
@@ -369,9 +376,13 @@ class HybridAdapter:
         work = run_dir / 'work'
         work.mkdir(parents=True)
         (work / 'ledger.csv').write_text(TASKS[task_id]['csv'])
-        result = self.executor(self.profile, task_id, work, candidate, run_id)
+        if memory is not None:
+            (run_dir / 'memory.json').write_text(memory.data)
+        kwargs = {'memory': memory} if memory is not None else {}
+        result = self.executor(self.profile, task_id, work, candidate, run_id, **kwargs)
         assessment = assess(task_id, work, worker_success=bool(result['success']))
         payload = {**result, **assessment, 'identity': identity, 'profile': self.profile,
+                   'memory_sha256': memory.sha256 if memory else None,
                    'task_id': task_id, 'run_id': run_id, 'artifact_sha256': self._artifact_hash(work)}
         record.write_text(json.dumps(payload, indent=2))
         # Recorded events only; never manufacture tool actions from a task description.
@@ -400,6 +411,10 @@ class HybridAdapter:
     def _checked_record(self, run_dir):
         run_dir = Path(run_dir)
         row = json.loads((run_dir / 'attempt.json').read_text())
+        if row.get('memory_sha256'):
+            memory_file = run_dir / 'memory.json'
+            if memory_file.is_symlink() or not memory_file.is_file() or hashlib.sha256(memory_file.read_bytes()).hexdigest() != row['memory_sha256']:
+                raise Refused('recorded memory drift')
         source = run_dir / 'work/ledger.csv'
         if source.is_symlink() or not source.is_file() or source.read_text() != TASKS[row['task_id']]['csv']:
             raise Refused('source drift in recorded result')
